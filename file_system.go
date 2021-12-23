@@ -336,6 +336,7 @@ func parseLIST(entry string, loc *time.Location, skipSelfParent bool) (os.FileIn
 
 	matches := lsRegex.FindStringSubmatch(entry)
 
+	var mtime time.Time
 	// on failure - try with MS format.
 	if len(matches) == 0 {
 		msmatches := lsRegexMS.FindStringSubmatch(entry)
@@ -353,11 +354,29 @@ func parseLIST(entry string, loc *time.Location, skipSelfParent bool) (os.FileIn
 			matches[2] = "rwx"
 			matches[3] = "rwx"
 			matches[4] = "rwx"
-			if d, e := time.Parse("01-02-06", msmatches[1]); e == nil {
-				matches[6] = d.Format("Jan _2")
-			}
-			if t, e := time.Parse("03:04pm", strings.ToLower(msmatches[2])); e == nil {
-				matches[7] = t.Format("15:04")
+			// TODO: clean up
+			if dt, e := time.Parse("01-02-06 03:04pm", fmt.Sprintf("%s %s", msmatches[1], strings.ToLower(msmatches[2]))); e == nil {
+				mtime = dt
+				if dt.Year() == time.Now().Year() {
+					matches[6] = dt.Format("Jan _2")
+					matches[7] = dt.Format("15:04")
+				} else {
+					matches[6] = dt.Format("Jan _2")
+					matches[7] = dt.Format("2006")
+				}
+			} else {
+				d, e := time.Parse("01-02-06", msmatches[1])
+				if e == nil {
+					matches[6] = d.Format("Jan _2")
+					if d.Year() != time.Now().Year() {
+						matches[7] = d.Format("2006")
+					}
+				}
+				if e != nil || d.Year() != time.Now().Year() {
+					if t, e := time.Parse("03:04pm", strings.ToLower(msmatches[2])); e == nil {
+						matches[7] = t.Format("15:04")
+					}
+				}
 			}
 			matches[8] = msmatches[4]
 		}
@@ -396,23 +415,24 @@ func parseLIST(entry string, loc *time.Location, skipSelfParent bool) (os.FileIn
 		return nil, ftpError{err: fmt.Errorf(`failed parsing LIST entry's size: %s (%s)`, err, entry)}
 	}
 
-	var mtime time.Time
-	if strings.Contains(matches[7], ":") {
-		mtime, err = time.ParseInLocation("Jan _2 15:04", matches[6]+" "+matches[7], loc)
-		if err == nil {
-			now := time.Now()
-			year := now.Year()
-			if mtime.Month() > now.Month() {
-				year--
+	if mtime.Equal(time.Time{}) {
+		if strings.Contains(matches[7], ":") {
+			mtime, err = time.ParseInLocation("Jan _2 15:04", matches[6]+" "+matches[7], loc)
+			if err == nil {
+				now := time.Now()
+				year := now.Year()
+				if mtime.Month() > now.Month() {
+					year--
+				}
+				mtime, err = time.ParseInLocation("Jan _2 15:04 2006", matches[6]+" "+matches[7]+" "+strconv.Itoa(year), loc)
 			}
-			mtime, err = time.ParseInLocation("Jan _2 15:04 2006", matches[6]+" "+matches[7]+" "+strconv.Itoa(year), loc)
+		} else {
+			mtime, err = time.ParseInLocation("Jan _2 2006", matches[6]+" "+matches[7], loc)
 		}
-	} else {
-		mtime, err = time.ParseInLocation("Jan _2 2006", matches[6]+" "+matches[7], loc)
-	}
 
-	if err != nil {
-		return nil, ftpError{err: fmt.Errorf(`failed parsing LIST entry's mtime: %s (%s)`, err, entry)}
+		if err != nil {
+			return nil, ftpError{err: fmt.Errorf(`failed parsing LIST entry's mtime: %s (%s)`, err, entry)}
+		}
 	}
 
 	info := &ftpFile{
